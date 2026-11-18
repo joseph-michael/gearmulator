@@ -178,11 +178,16 @@ namespace emu88Player
 		emu88Lib::BootOptions bootOptions() const;
 		void setBootOptions(const emu88Lib::BootOptions& _boot);
 
-		// The PCM card in the CM-32P's or CM-64's slot, by the path of its image; empty for no card.
-		std::string pcmCardPath() const;
-		// Loads the card at _path for every board with a slot from the next device load on and remembers
+		// The card slots the boards have: the PCM card of the CM-32P, the CM-64 and the MV-30, and the
+		// style card of the PRO-E.
+		enum class CardSlot { Pcm, Style };
+		// Whether the board has the slot.
+		static bool hasCardSlot(CardSlot _slot, emu88Lib::DeviceModel _model);
+		// The card in the slot, by the path of its image; empty for no card.
+		std::string cardPath(CardSlot _slot) const;
+		// Loads the card at _path for every board with the slot from the next device load on and remembers
 		// the path; an empty one empties the slot. On failure nothing changes and _error says why.
-		bool setPcmCardPath(const std::string& _path, std::string& _error);
+		bool setCardPath(CardSlot _slot, const std::string& _path, std::string& _error);
 
 		// A board can only be selected once every ROM the registry lists for it
 		// is present; the device menu offers the rest greyed out.
@@ -230,8 +235,9 @@ namespace emu88Player
 		// UI MIDI is applied by firmware on later callbacks. Preserve the selected instrument until it arrives.
 		uint64_t m_pendingInstrumentEdits = 0;
 		uint64_t m_panelRevisionAtInstrumentEdit = 0;
-		// The card in every CM-32P and CM-64 this session loads, see pcmCardPath().
+		// The cards in every board with the slot this session loads, see cardPath().
 		std::vector<uint8_t> m_pcmCard;
+		std::vector<uint8_t> m_styleCard;
 		emu88Lib::DeviceModel m_deviceModel = emu88Lib::DeviceModel::Sc88Pro;
 		std::atomic<bool> m_reverseOutputChannels{false};
 		std::atomic<float> m_outputGain{kUnityOutputGain};

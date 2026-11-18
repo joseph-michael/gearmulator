@@ -141,7 +141,7 @@ namespace emu88Player
 		m_config->setValue("deviceModel", modelValue);
 		if(isHosted()) m_config->setValue("portMidiEnabled", false);
 		std::string cardError;
-		if(!setPcmCardPath(values.getValue("pcmCardPath").toStdString(), cardError))
+		if(!setCardPath(CardSlot::Pcm, values.getValue("pcmCardPath").toStdString(), cardError))
 			m_pcmCard.clear();
 		m_pendingRestore = std::move(events);
 		const auto fastBoot = values.getBoolValue("fastBoot", isHosted());
