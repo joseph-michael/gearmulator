@@ -66,8 +66,9 @@ namespace emu88Player
 		void setCurrentProgram(int) override {}
 		const juce::String getProgramName(int) override { return {}; }
 		void changeProgramName(int, const juce::String&) override {}
-		void getStateInformation(juce::MemoryBlock& _destination) override { _destination.reset(); }
-		void setStateInformation(const void*, int) override {}
+		void getStateInformation(juce::MemoryBlock& _destination) override;
+		void setStateInformation(const void* _data, int _size) override;
+		bool isHosted() const { return wrapperType == wrapperType_VST3; }
 
 		emu88Lib::HardwareDevice* hardware() const { return m_device.get(); }
 		jucePlayer::MidiPlayer& midiPlayer() { return m_midiPlayer; }
@@ -205,6 +206,9 @@ namespace emu88Player
 		void addMidiBuffer(const juce::MidiBuffer& _midi, uint8_t _port, synthLib::MidiEventSource _source);
 		// Drains the live-input collectors for one block, passing them on only if _deliver.
 		void takeLiveMidi(int _samples, bool _deliver);
+		void applyPendingRestore();
+		void updateHostLatency();
+		bool captureHardwareInstruments();
 
 		jucePlayer::AudioRouting* m_audioRouting = nullptr;
 		jucePlayer::MidiInputRouting* m_midiInputRouting = nullptr;
@@ -216,6 +220,12 @@ namespace emu88Player
 		std::unique_ptr<synthLib::Plugin> m_engine;
 		std::unique_ptr<jucePlayer::PortMidiBridge> m_portMidiBridge;
 		jucePlayer::MidiPlayer m_midiPlayer;
+		// A missing ROM or a host that restores before prepareToPlay leaves this for the next preparation.
+		std::vector<synthLib::SMidiEvent> m_pendingRestore;
+		uint64_t m_seenInstrumentRevision = 0;
+		// UI MIDI is applied by firmware on later callbacks. Preserve the selected instrument until it arrives.
+		uint64_t m_pendingInstrumentEdits = 0;
+		uint64_t m_panelRevisionAtInstrumentEdit = 0;
 		// The card in every CM-32P and CM-64 this session loads, see pcmCardPath().
 		std::vector<uint8_t> m_pcmCard;
 		emu88Lib::DeviceModel m_deviceModel = emu88Lib::DeviceModel::Sc88Pro;

@@ -9,6 +9,7 @@
 #include "synthLib/midiRateLimiter.h"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -19,6 +20,7 @@
 
 namespace emu88Lib
 {
+	namespace gs { struct Setup; }
 	class Sc88;
 	class Sc88Pro;
 	class Sc8850;
@@ -100,6 +102,11 @@ namespace emu88Lib
 		uint32_t getChannelCountOut() override { return 2; }
 		uint64_t getDspClockHz() const override;
 		DeviceModel model() const { return m_model; }
+		// Between process() calls, with the processor callback lock held.
+		// Unsupported board/firmware layouts leave the setup unchanged.
+		bool readPartInstruments(gs::Setup& _setup) const;
+		uint64_t instrumentStateRevision() const;
+		uint64_t panelInstrumentRevision() const { return m_panelInstrumentRevision.load(std::memory_order_relaxed); }
 		void setPanelButtons(uint32_t _buttons);
 		// The MV-30's front panel: its switches, bit n = Mv30Button n, more than setPanelButtons() carries, and
 		// the footswitch
@@ -180,6 +187,7 @@ namespace emu88Lib
 		std::vector<synthLib::SMidiEvent> m_midiOut;
 
 		mutable std::mutex m_panelMutex;
+		std::atomic<uint64_t> m_panelInstrumentRevision{0};
 		std::deque<PanelCommand> m_pendingPanelCommands;
 		std::deque<PanelCommand> m_panelCommands;
 		uint64_t m_nextPanelCommandSample = 0;

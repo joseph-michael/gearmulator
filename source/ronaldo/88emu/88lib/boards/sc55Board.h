@@ -16,6 +16,7 @@
 
 namespace emu88Lib
 {
+	namespace gs { struct Setup; }
 	// =====================================================================
 	// Shared implementation behind the first-generation and mkII-derived
 	// SC-55 boards. Product differences are data in Sc55DeviceProfile.
@@ -179,6 +180,10 @@ namespace emu88Lib
 		bool isIrqPending(const IrqLine _line) const { return m_irqLine[_line & 1]; }
 
 		uint64_t cycles() const { return m_machine.now(); }
+		// Read the firmware's actual instrument/channel settings, including panel edits.
+		// Call between renderSample() calls; unknown firmware layouts return false.
+		bool readPartInstruments(gs::Setup& _setup) const;
+		uint64_t instrumentStateRevision() const { return m_instrumentStateRevision; }
 
 	private:
 		void runFactoryReset();
@@ -188,6 +193,7 @@ namespace emu88Lib
 		// ---- Board hooks, called from the chip model ----
 		uint8_t  extRead8 (uint32_t _addr);
 		void     extWrite8(uint32_t _addr, uint8_t _val);
+		void     writeSram(uint32_t _offset, uint8_t _value);
 		// A port data-register read, with the value the port model computed.
 		uint8_t  portRead (unsigned _port, uint8_t _value);
 		uint16_t analogRead(uint8_t _channel);
@@ -247,6 +253,8 @@ namespace emu88Lib
 		bool     m_valid = false;
 
 		std::vector<uint8_t> m_sram = std::vector<uint8_t>(SramSize, 0);
+		bool m_partInstrumentLayoutKnown = false;
+		uint64_t m_instrumentStateRevision = 0;
 
 		GP  m_gp;
 		Lcd m_lcd;

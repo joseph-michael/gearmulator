@@ -2,6 +2,40 @@
   "version": 6,
   "configurePresets": [
     {
+      "name": "88emu-macos-arm64",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/88emu-macos",
+      "displayName": "88emuPlayer standalone and VST3 (Apple Silicon)",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "14.0",
+        "CMAKE_POLICY_VERSION_MINIMUM": "3.5",
+        "BUILD_TESTING": "ON",
+        "gearmulator_BUILD_JUCEPLUGIN": "ON",
+        "gearmulator_SYNTH_88EMU": "ON",
+        "gearmulator_BUILD_JUCEPLUGIN_Standalone": "ON",
+        "gearmulator_BUILD_JUCEPLUGIN_VST3": "ON",
+        "gearmulator_SYNTH_OSIRUS": "OFF",
+        "gearmulator_SYNTH_OSTIRUS": "OFF",
+        "gearmulator_SYNTH_VAVRA": "OFF",
+        "gearmulator_SYNTH_XENIA": "OFF",
+        "gearmulator_SYNTH_NODALRED2X": "OFF",
+        "gearmulator_SYNTH_JE8086": "OFF",
+        "gearmulator_COMPONENT_DSPBRIDGE": "OFF",
+        "gearmulator_BUILD_INSTALLER": "OFF",
+        "gearmulator_BUILD_JUCEPLUGIN_VST2": "OFF",
+        "gearmulator_BUILD_JUCEPLUGIN_AU": "OFF",
+        "gearmulator_BUILD_JUCEPLUGIN_CLAP": "OFF",
+        "gearmulator_BUILD_JUCEPLUGIN_LV2": "OFF"
+      }
+    },
+    {
       "name": "base",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/temp/cmake_${presetName}",
@@ -127,6 +161,25 @@
     }
   ],
   "buildPresets": [
+    {
+      "name": "88emu-macos-arm64",
+      "configurePreset": "88emu-macos-arm64",
+      "targets": [
+        "88emuplayer_Standalone",
+        "88emuplayer_VST3",
+        "88EmuCli",
+        "88emuPanelState_test",
+        "88emuProjectState_test",
+        "88emuVst3Host_test",
+        "setupRestore_test",
+        "hardwareDevice_test",
+        "partState_test",
+        "mt32Memory_test",
+        "resamplerLatency_test",
+        "dynamicSamplerate_test",
+        "88emuLaunchOptions_test"
+      ]
+    },
     {
       "name": "default",
       "configurePreset": "default",

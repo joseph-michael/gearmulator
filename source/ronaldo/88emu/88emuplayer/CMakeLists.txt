@@ -61,6 +61,12 @@ set(HARDWARE_ASSETS
 	${HARDWARE_SKIN_DIR}/value_knob.png
 )
 juce_add_binary_data(88emuplayer_BinaryData SOURCES ${HARDWARE_ASSETS})
+set(playerFormats)
+foreach(format IN ITEMS Standalone VST3)
+	if(USE_${format})
+		list(APPEND playerFormats ${format})
+	endif()
+endforeach()
 juce_add_plugin(88emuplayer
 	# The 512px application icon supplies both ICNS and Windows ICO sizes.
 	ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon.png"
@@ -74,13 +80,15 @@ juce_add_plugin(88emuplayer
 	COPY_PLUGIN_AFTER_BUILD FALSE
 	PLUGIN_MANUFACTURER_CODE TusP
 	PLUGIN_CODE TscH
-	FORMATS Standalone
+	FORMATS ${playerFormats}
+	VST3_CATEGORIES Instrument Synth
 	PRODUCT_NAME "88emuPlayer"
 	PRODUCTS_FOLDER "${TUS_BIN_DIR}/plugins/$<CONFIG>"
 	BUNDLE_ID "com.theusualsuspects.SC88Hardware"
 )
 target_sources(88emuplayer PRIVATE
 	Emu88Processor.cpp Emu88Processor.h
+	app/Emu88ProjectState.cpp
 	app/Emu88LaunchOptions.cpp app/Emu88LaunchOptions.h
 	app/Emu88Playlist.cpp app/Emu88Playlist.h
 	ui/Emu88Editor.cpp ui/Emu88Editor.h
@@ -119,15 +127,23 @@ endif()
 if(TARGET PluginFormat_Standalone)
 	add_dependencies(PluginFormat_Standalone 88emuplayer_Standalone)
 endif()
+if(TARGET PluginFormat_VST3)
+	add_dependencies(PluginFormat_VST3 88emuplayer_VST3)
+	install(TARGETS 88emuplayer_VST3 DESTINATION . COMPONENT 88emuPlayer-VST3)
+endif()
 # The standalone player needs its own install rule and CPack component. No macOS setup script: the
 # README explains how to allow the quarantined app and CLI in System Settings.
 set(playerProductName "88emuPlayer")
-if(APPLE)
-	install(TARGETS 88emuplayer_Standalone DESTINATION . COMPONENT ${playerProductName}-Standalone)
-elseif(MSVC)
-	install(TARGETS 88emuplayer_Standalone RUNTIME DESTINATION . COMPONENT ${playerProductName}-Standalone)
-else()
-	install(TARGETS 88emuplayer_Standalone RUNTIME DESTINATION bin/ COMPONENT ${playerProductName}-Standalone)
+if(TARGET 88emuplayer_Standalone)
+	if(APPLE)
+		install(TARGETS 88emuplayer_Standalone DESTINATION . COMPONENT ${playerProductName}-Standalone)
+	elseif(MSVC)
+		install(TARGETS 88emuplayer_Standalone RUNTIME DESTINATION . COMPONENT ${playerProductName}-Standalone)
+	else()
+		install(TARGETS 88emuplayer_Standalone RUNTIME DESTINATION bin/ COMPONENT ${playerProductName}-Standalone)
+	endif()
+	# Keep JUCE's wrapper, but own startup configuration before it opens devices.
+	target_sources(88emuplayer_Standalone PRIVATE app/Emu88Standalone.cpp)
 endif()
 set_target_properties(88emuplayer PROPERTIES TUS_PRODUCT_NAME "${playerProductName}")
 tus_exportTarget(88emuplayer)
@@ -144,8 +160,6 @@ install(FILES "${CMAKE_SOURCE_DIR}/doc/changelog_split/changelog_${playerProduct
 	DESTINATION .
 	COMPONENT ${playerProductName}-Standalone
 	OPTIONAL)
-# Keep JUCE's wrapper, but own startup configuration before it opens devices.
-target_sources(88emuplayer_Standalone PRIVATE app/Emu88Standalone.cpp)
 target_compile_definitions(88emuplayer PUBLIC JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1)
 # The CLI's --video mode renders the player's own UI, so it links the plugin's shared code (the
 # processor, the editor and the skin assets) rather than growing a second copy of the front panel.
@@ -166,6 +180,25 @@ else()
 	install(TARGETS 88EmuCli RUNTIME DESTINATION bin COMPONENT ${playerProductName}-Standalone)
 endif()
 if(BUILD_TESTING)
+	add_executable(88emuPanelState_test tests/Emu88PanelState_test.cpp)
+	target_link_libraries(88emuPanelState_test PRIVATE 88emuplayer 88emuplayer_BinaryData 88lib juceMidiPorts
+		jucePlayerLib juceRmlUi juceUiLib jucePluginData juce_plugin_modules)
+	add_test(NAME 88emuPanelState COMMAND 88emuPanelState_test)
+	set_tests_properties(88emuPanelState PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+	add_executable(88emuProjectState_test tests/Emu88ProjectState_test.cpp)
+	target_link_libraries(88emuProjectState_test PRIVATE 88emuplayer 88emuplayer_BinaryData 88lib juceMidiPorts
+		jucePlayerLib juceRmlUi juceUiLib jucePluginData juce_plugin_modules)
+	add_test(NAME 88emuProjectState COMMAND 88emuProjectState_test)
+	set_tests_properties(88emuProjectState PROPERTIES TIMEOUT 120)
+	if(TARGET 88emuplayer_VST3)
+		juce_add_console_app(88emuVst3Host_test PRODUCT_NAME "88emu VST3 Host Test")
+		target_sources(88emuVst3Host_test PRIVATE tests/Emu88Vst3Host_test.cpp)
+		target_link_libraries(88emuVst3Host_test PRIVATE juce::juce_audio_utils)
+		target_compile_definitions(88emuVst3Host_test PRIVATE JUCE_PLUGINHOST_VST3=1 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+		add_dependencies(88emuVst3Host_test 88emuplayer_VST3)
+		add_test(NAME 88emuVst3Host COMMAND 88emuVst3Host_test $<TARGET_BUNDLE_DIR:88emuplayer_VST3>)
+		set_tests_properties(88emuVst3Host PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
+	endif()
 	add_executable(88emuLaunchOptions_test tests/Emu88LaunchOptions_test.cpp app/Emu88LaunchOptions.cpp app/Emu88Playlist.cpp)
 	target_link_libraries(88emuLaunchOptions_test PRIVATE 88lib jucePlayerLib)
 	add_test(NAME 88emuLaunchOptions COMMAND 88emuLaunchOptions_test)
@@ -173,7 +206,7 @@ if(BUILD_TESTING)
 endif()
 
 # Numeric argument validation must retain NaN/Inf checks in Release.
-foreach(target IN ITEMS 88emuplayer 88EmuCli 88emuLaunchOptions_test)
+foreach(target IN ITEMS 88emuplayer 88EmuCli 88emuLaunchOptions_test 88emuProjectState_test 88emuVst3Host_test)
 	if(TARGET ${target})
 		if(MSVC)
 			target_compile_options(${target} PRIVATE /fp:precise)

@@ -19,9 +19,12 @@
 
 #include "88lib/boards/sc55Board.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include "common/romDescramble.h"
+#include "88lib/gs/partState.h"
+#include "88lib/gs/gs.h"
 
 namespace emu88Lib
 {
@@ -45,6 +48,22 @@ namespace emu88Lib
 
 		// Rear-panel mode switch, as the A/D sees it.
 		constexpr uint16_t g_switchLevels[4] = { 0x000, 0x155, 0x2aa, 0x3ff };
+
+		// SC-55mkII 1.01's GS handlers at 04:1D7D and 04:2597 multiply the
+		// part's GS block by 0x70 and add CPU address 0x8048. Its descriptor
+		// table at ROM 0x3D8D2 puts bank/program/channel at offsets 0/1/4.
+		// Confirmed against MIDI requests and physical instrument-button edits.
+		constexpr uint32_t g_partSramBase = 0x48;
+		constexpr uint32_t g_partSramStride = 0x70;
+		bool hasPartInstrumentLayout(const Sc55RomSet& _roms)
+		{
+			constexpr uint8_t handler[]{0x04, 0x70, 0xa8, 0x0c, 0x80, 0x48, 0x20};
+			return _roms.profile().generation == Sc55Generation::Mk2 &&
+				baseLib::MD5(_roms.internalRom) == baseLib::MD5("4ca058f7db05f51e97bb30a162e9610a") &&
+				_roms.programRom.size() >= 0x2597 + sizeof(handler) &&
+				std::equal(std::begin(handler), std::end(handler), _roms.programRom.begin() + 0x1d7d) &&
+				std::equal(std::begin(handler), std::end(handler), _roms.programRom.begin() + 0x2597);
+		}
 	}
 
 	Sc55Board::Sc55Board(Sc55RomSet _roms, const bool _factoryReset)
@@ -54,6 +73,8 @@ namespace emu88Lib
 		                       m_profile.generation == Sc55Generation::First})
 	{
 		m_valid = m_roms.isValid();
+		m_partInstrumentLayoutKnown = m_valid && hasPartInstrumentLayout(m_roms);
+		m_instrumentStateRevision = m_partInstrumentLayoutKnown ? 1 : 0;
 
 		// The original has three 1 MiB mask ROMs; the mkII has a 2 MiB and a
 		// 1 MiB part. Profile data maps each physical ROM to its GP chip select.
@@ -265,7 +286,7 @@ namespace emu88Lib
 				return;	// mask ROM
 			if(off < g_gpBase)
 			{
-				m_sram[(off - g_sramBase) & (SramSize - 1)] = _val;
+				writeSram((off - g_sramBase) & (SramSize - 1), _val);
 				return;
 			}
 			if(off <= (isMk1() ? uint16_t(0xE03F) : g_gpEnd))
@@ -299,8 +320,42 @@ namespace emu88Lib
 		}
 
 		if((isMk1() && page == 5) || (!isMk1() && (page == 10 || page == 11)))
-			m_sram[off & (SramSize - 1)] = _val;
+			writeSram(off & (SramSize - 1), _val);
 		// Everything else is ROM or unmapped.
+	}
+
+	void Sc55Board::writeSram(const uint32_t _offset, const uint8_t _value)
+	{
+		if(m_sram[_offset] == _value) return;
+		m_sram[_offset] = _value;
+		if(m_partInstrumentLayoutKnown && _offset >= g_partSramBase &&
+		   _offset < g_partSramBase + 16 * g_partSramStride)
+		{
+			const auto field = (_offset - g_partSramBase) % g_partSramStride;
+			if(field == 0 || field == 1 || field == 4) ++m_instrumentStateRevision;
+		}
+	}
+
+	bool Sc55Board::readPartInstruments(gs::Setup& _setup) const
+	{
+		if(!m_partInstrumentLayoutKnown || _setup.parts.size() != gs::g_partsPerGroup)
+			return false;
+		for(uint8_t part = 0; part < gs::g_partsPerGroup; ++part)
+		{
+			const auto address = g_partSramBase + gs::partBlock(part) * g_partSramStride;
+			if(m_sram[address] > 127 || m_sram[address + 1] > 127 || m_sram[address + 4] > 16)
+				return false;
+		}
+		for(uint8_t part = 0; part < gs::g_partsPerGroup; ++part)
+		{
+			const auto address = g_partSramBase + gs::partBlock(part) * g_partSramStride;
+			auto& target = _setup.parts[part];
+			if(target.bankMsb != m_sram[address]) target.pendingBankMsb = m_sram[address];
+			target.bankMsb = m_sram[address];
+			target.program = m_sram[address + 1];
+			target.rxChannel = m_sram[address + 4];
+		}
+		return true;
 	}
 
 	// =====================================================================

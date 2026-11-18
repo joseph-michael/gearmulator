@@ -425,24 +425,27 @@ namespace emu88Player
 					editor->showSettings(true);
 			});
 		});
-		m_contextMenu->addEntry("Audio Settings...", [this]
+		if(!m_processor.isHosted())
 		{
-			const juce::WeakReference<Editor> safeThis(this);
-			juce::MessageManager::callAsync([safeThis]
+			m_contextMenu->addEntry("Audio Settings...", [this]
 			{
-				if(auto* editor = safeThis.get())
-					editor->showAudioSettings();
+				const juce::WeakReference<Editor> safeThis(this);
+				juce::MessageManager::callAsync([safeThis]
+				{
+					if(auto* editor = safeThis.get())
+						editor->showAudioSettings();
+				});
 			});
-		});
-		m_contextMenu->addEntry("MIDI Settings...", [this]
-		{
-			const juce::WeakReference<Editor> safeThis(this);
-			juce::MessageManager::callAsync([safeThis]
+			m_contextMenu->addEntry("MIDI Settings...", [this]
 			{
-				if(auto* editor = safeThis.get())
-					editor->showMidiSettings();
+				const juce::WeakReference<Editor> safeThis(this);
+				juce::MessageManager::callAsync([safeThis]
+				{
+					if(auto* editor = safeThis.get())
+						editor->showMidiSettings();
+				});
 			});
-		});
+		}
 		m_contextMenu->addSeparator();
 		// The build, as a heading rather than a command - not clickable.
 		m_contextMenu->addEntry(m_processor.getName().toStdString() + ' ' + g_pluginVersionString,

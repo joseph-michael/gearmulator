@@ -21,6 +21,17 @@ namespace emu88Player
 		constexpr auto g_fastBootKey = "fastBoot";
 		constexpr auto g_pcmCardPathKey = "pcmCardPath";
 
+		std::unique_ptr<juce::PropertiesFile> createInstanceConfig()
+		{
+			juce::PropertiesFile::Options options;
+			options.doNotSave = true;
+			options.millisecondsBeforeSaving = -1;
+			auto config = std::make_unique<juce::PropertiesFile>(juce::File{}, options);
+			// A host can send MIDI on its first callback, without waiting for the power-on animation.
+			config->setValue("fastBoot", true);
+			return config;
+		}
+
 		std::shared_ptr<const emu88Lib::gs::ToneCatalog> loadToneCatalog(const emu88Lib::DeviceModel _model,
 			std::string& _error)
 		{
@@ -44,10 +55,10 @@ namespace emu88Player
 		  m_romFolder(standaloneLaunch && standaloneLaunch->has("rom-dir")
 			? launchFile(standaloneLaunch->get("rom-dir")).getFullPathName().toStdString()
 			: defaultDataFolder() + "roms/"),
-		  m_ownedConfig(standaloneConfig ? nullptr : createConfig(m_dataFolder)),
-		  m_config(standaloneConfig ? standaloneConfig : m_ownedConfig.get())
+		  m_ownedConfig(isHosted() ? createInstanceConfig() : standaloneConfig ? nullptr : createConfig(m_dataFolder)),
+		  m_config(!isHosted() && standaloneConfig ? standaloneConfig : m_ownedConfig.get())
 	{
-		if(!standaloneLaunch || !standaloneLaunch->has("rom-dir"))
+		if(!isHosted() && (!standaloneLaunch || !standaloneLaunch->has("rom-dir")))
 			(void)juce::File(m_romFolder).createDirectory();
 		configureRomSearchPaths(standaloneLaunch ? *standaloneLaunch : LaunchOptions{});
 		// Live MIDI can arrive before the audio device starts; prepareToPlay() sets the real rate.
@@ -129,10 +140,10 @@ namespace emu88Player
 		                   std::memory_order_relaxed);
 
 		// Start the bridge only on backends that provide virtual endpoints.
-		const auto portMidiEnabled = jucePlayer::PortMidiBridge::virtualPortsSupported() &&
+		const auto portMidiEnabled = !isHosted() && jucePlayer::PortMidiBridge::virtualPortsSupported() &&
 			m_config->getBoolValue("portMidiEnabled", true);
 		m_portMidiEnabled.store(portMidiEnabled, std::memory_order_release);
-		if(jucePlayer::PortMidiBridge::virtualPortsSupported())
+		if(!isHosted() && jucePlayer::PortMidiBridge::virtualPortsSupported())
 		{
 			m_portMidiBridge = std::make_unique<jucePlayer::PortMidiBridge>([this](synthLib::SMidiEvent _event)
 			{
@@ -147,6 +158,7 @@ namespace emu88Player
 
 	Processor::~Processor()
 	{
+		cancelPendingUpdate();
 		m_dataRequestsAbort.store(true, std::memory_order_release);
 		if(m_dataRequestThread.joinable())
 			m_dataRequestThread.join();
@@ -271,6 +283,8 @@ namespace emu88Player
 	{
 		if(!emu88Lib::isDeviceModelValue(static_cast<uint32_t>(_model)))
 			return false;
+		if(_model != m_deviceModel)
+			m_pendingRestore.clear();
 
 		if(_model == m_deviceModel && hasValidRom())
 		{
@@ -317,6 +331,11 @@ namespace emu88Player
 		(void)emu88Lib::RomLoader::rescan();
 
 		auto boot = bootOptions();
+		if(!m_pendingRestore.empty())
+		{
+			boot.factoryReset = true;
+			boot.fastBoot = true;
+		}
 		boot.initialPanelButtons = heldButtons;
 		auto replacementDevice = std::make_unique<emu88Lib::HardwareDevice>(createDeviceParams(_model), boot, m_pcmCard);
 		replacementDevice->setAnalogOutputMode(m_analogOutputMode);
@@ -346,6 +365,7 @@ namespace emu88Player
 			m_device = std::move(replacementDevice);
 			m_engine = std::move(replacementEngine);
 			m_deviceModel = _model;
+			m_pendingInstrumentEdits = 0;
 			++m_deviceGeneration;
 			m_partState.setModel(_model, catalog);
 			m_laDialect = emu88Lib::mt32::isMt32Model(_model);
@@ -372,6 +392,12 @@ namespace emu88Player
 			m_config->setValue(g_deviceModelKey, static_cast<int>(_model));
 			m_config->saveIfNeeded();
 		}
+		{
+			const juce::ScopedLock lock(getCallbackLock());
+			applyPendingRestore();
+			m_seenInstrumentRevision = m_device->instrumentStateRevision();
+			updateHostLatency();
+		}
 		return hasValidRom();
 	}
 
@@ -380,8 +406,28 @@ namespace emu88Player
 		const juce::ScopedLock lock(getCallbackLock());
 		if(!m_engine || !m_device || !m_device->isValid())
 			return;
+		const auto hardwareChanged = captureHardwareInstruments();
+		const auto instrumentsBefore = m_partState.setup();
+		const auto gsRevision = m_partState.revision();
+		const auto laRevision = m_laState.revision();
 		for(const auto& event : _events)
 			deliverMidi(event);
+		if(gsRevision != m_partState.revision())
+		{
+			const auto instrumentsAfter = m_partState.setup();
+			for(size_t i = 0; i < instrumentsAfter.parts.size() && i < 64; ++i)
+			{
+				const auto& before = instrumentsBefore.parts[i];
+				const auto& after = instrumentsAfter.parts[i];
+				if(before.bankMsb != after.bankMsb || before.program != after.program || before.rxChannel != after.rxChannel)
+				{
+					m_panelRevisionAtInstrumentEdit = m_device->panelInstrumentRevision();
+					m_pendingInstrumentEdits |= uint64_t{1} << i;
+				}
+			}
+		}
+		if(hardwareChanged || gsRevision != m_partState.revision() || laRevision != m_laState.revision())
+			updateHostDisplay(ChangeDetails{}.withNonParameterStateChanged(true));
 	}
 
 	void Processor::deliverMidi(const synthLib::SMidiEvent& _event)
@@ -473,6 +519,8 @@ namespace emu88Player
 		m_engine->setHostSamplerate(static_cast<float>(_sampleRate), 0.0f);
 		m_engine->setBlockSize(static_cast<uint32_t>(std::max(1, _maximumBlockSize)));
 		m_engine->setResamplerMode(resamplerMode());
+		applyPendingRestore();
+		updateHostLatency();
 	}
 
 	void Processor::setOutputLimiterEnabled(bool enabled)
@@ -505,6 +553,7 @@ namespace emu88Player
 			m_engine->setResamplerMode(_mode);
 		m_config->setValue("resamplerMode", static_cast<int>(_mode));
 		m_config->saveIfNeeded();
+		updateHostLatency();
 	}
 
 	void Processor::setAnalogOutputMode(const emu88Lib::AnalogOutputMode _mode)
@@ -523,11 +572,12 @@ namespace emu88Player
 		m_device->setAnalogOutputMode(_mode);
 		if(getSampleRate() > 0.0)
 			m_engine->setPreferredDeviceSamplerate(0.0f);
+		updateHostLatency();
 	}
 
 	void Processor::setPortMidiEnabled(const bool _enabled)
 	{
-		if(!jucePlayer::PortMidiBridge::virtualPortsSupported())
+		if(isHosted() || !jucePlayer::PortMidiBridge::virtualPortsSupported())
 			return;
 		m_portMidiEnabled.store(_enabled, std::memory_order_release);
 		if(m_portMidiBridge)
@@ -555,7 +605,16 @@ namespace emu88Player
 
 	void Processor::handleAsyncUpdate()
 	{
+		const juce::ScopedLock lock(getCallbackLock());
 		if(m_engine) m_engine->applyPendingDeviceSamplerate();
+		if(captureHardwareInstruments())
+			updateHostDisplay(ChangeDetails{}.withNonParameterStateChanged(true));
+		updateHostLatency();
+	}
+
+	void Processor::updateHostLatency()
+	{
+		setLatencySamples(m_engine ? static_cast<int>(m_engine->getLatencyMidiToOutput()) : 0);
 	}
 
 	void Processor::addLiveMidi(const juce::MidiMessage& _message, const uint8_t _groups)
@@ -591,6 +650,11 @@ namespace emu88Player
 	{
 		juce::ScopedNoDenormals noDenormals;
 		_buffer.clear();
+		if(_buffer.getNumSamples() == 0)
+		{
+			_midi.clear();
+			return;
+		}
 		if(!m_engine || !m_device || !m_device->isValid())
 		{
 			_midi.clear();
@@ -627,12 +691,42 @@ namespace emu88Player
 		// This standalone has no audio inputs.
 		synthLib::TAudioInputs inputs{};
 		synthLib::TAudioOutputs outputs{_buffer.getWritePointer(0), _buffer.getWritePointer(1)};
+		float bpm = 120.0f;
+		double ppq = 0.0;
+		bool playing = false;
+		bool hasPpq = false;
+		synthLib::HostLoop loop;
+		if(const auto* playHead = getPlayHead())
+			if(const auto position = playHead->getPosition())
+			{
+				playing = position->getIsPlaying();
+				if(const auto tempo = position->getBpm()) bpm = static_cast<float>(*tempo);
+				if(const auto beat = position->getPpqPosition())
+				{
+					ppq = *beat;
+					hasPpq = true;
+				}
+				if(const auto points = position->getLoopPoints())
+				{
+					loop = {position->getIsLooping(), points->ppqStart, points->ppqEnd};
+				}
+			}
 		m_engine->process(inputs, outputs, static_cast<size_t>(_buffer.getNumSamples()),
-		                  120.0f, 0.0f, false, false);
+		                  bpm, ppq, playing, hasPpq, loop);
 
 		// The device can change its clock while playing. Switching the resampler over builds and
 		// prewarms new filters, so Plugin only records the new rate here - apply it off this thread.
 		if(m_engine->hasPendingDeviceSamplerate())
+		{
+			if(isNonRealtime())
+			{
+				m_engine->applyPendingDeviceSamplerate();
+				updateHostLatency();
+			}
+			else
+				triggerAsyncUpdate();
+		}
+		if(m_device->instrumentStateRevision() != m_seenInstrumentRevision)
 			triggerAsyncUpdate();
 		_buffer.applyGain(outputGain());
 		m_outputLimiter.process(_buffer.getWritePointer(0), _buffer.getWritePointer(1),

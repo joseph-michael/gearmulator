@@ -36,6 +36,8 @@ namespace emu88Player
 
     void Editor::adoptStandaloneSettings()
     {
+        if (m_processor.isHosted())
+            return;
         auto* holder = juce::StandalonePluginHolder::getInstance();
         if (!holder)
             return;
@@ -227,6 +229,9 @@ namespace emu88Player
               std::pair{"btSettingsDeveloper", "pageSettingsDeveloper"}})
             juceRmlUi::EventListener::AddClick(m_settingsRoot->GetElementById(page.first),
                                                [this, page] { selectSettingsPage(page.second, page.first); });
+        if (m_processor.isHosted())
+            for (const auto* id : {"btSettingsAudio", "btSettingsMidi"})
+                juceRmlUi::helper::setVisible(m_settingsRoot->GetElementById(id), false);
 
         if (auto* openFolder = m_settingsRoot->GetElementById("btOpenSkinFolder"))
             juceRmlUi::EventListener::AddClick(openFolder,

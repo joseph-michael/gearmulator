@@ -268,6 +268,16 @@ namespace emu88Lib
 
 	HardwareDevice::~HardwareDevice() = default;
 
+	bool HardwareDevice::readPartInstruments(gs::Setup& _setup) const
+	{
+		return m_sc55 && m_sc55->readPartInstruments(_setup);
+	}
+
+	uint64_t HardwareDevice::instrumentStateRevision() const
+	{
+		return m_sc55 ? m_sc55->instrumentStateRevision() : 0;
+	}
+
 	bool HardwareDevice::isPcmCardImage(const std::vector<uint8_t>& _image)
 	{
 		return !Cm32p::decodeCard(_image).empty();
@@ -353,6 +363,9 @@ namespace emu88Lib
 		   m_pendingPanelCommands.back().value == static_cast<int32_t>(_buttons))
 			return;
 		m_pendingPanelCommands.push_back({PanelCommandType::Buttons, static_cast<int32_t>(_buttons)});
+		if(isSc55Model(m_model) && (_buttons & (buttonBit(Button::InstL) | buttonBit(Button::InstR) |
+		   buttonBit(Button::MidiChL) | buttonBit(Button::MidiChR))))
+			m_panelInstrumentRevision.fetch_add(1, std::memory_order_relaxed);
 	}
 
 	void HardwareDevice::setMv30Panel(const uint64_t _buttons, const bool _footswitch)

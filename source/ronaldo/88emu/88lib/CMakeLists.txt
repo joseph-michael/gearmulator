@@ -15,6 +15,7 @@ set(SOURCES
 	gs/midiClip.cpp gs/midiClip.h
 	gs/params.cpp gs/params.h
 	gs/partState.cpp gs/partState.h
+	gs/setupRestore.cpp gs/setupRestore.h
 	gs/toneCatalog.cpp gs/toneCatalog.h
 	gs/toneCatalogSc55.cpp gs/toneCatalogSc88.cpp gs/toneCatalogSc8850.cpp
 	mt32/memory.cpp mt32/memory.h
@@ -154,6 +155,12 @@ if(BUILD_TESTING)
 	set_property(TARGET partState_test PROPERTY FOLDER "Ronaldo/tests")
 	add_test(NAME partState COMMAND partState_test)
 	set_tests_properties(partState PROPERTIES TIMEOUT 20)
+
+	add_executable(setupRestore_test tests/setupRestore_test.cpp)
+	target_link_libraries(setupRestore_test PRIVATE 88lib)
+	set_property(TARGET setupRestore_test PROPERTY FOLDER "Ronaldo/tests")
+	add_test(NAME setupRestore COMMAND setupRestore_test)
+	set_tests_properties(setupRestore PROPERTIES TIMEOUT 20)
 
 	add_executable(rom_test tests/rom_test.cpp)
 	target_link_libraries(rom_test PRIVATE 88lib)
