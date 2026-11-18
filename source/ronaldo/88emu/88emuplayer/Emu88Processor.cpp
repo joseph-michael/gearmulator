@@ -396,6 +396,7 @@ namespace emu88Player
 			const juce::ScopedLock lock(getCallbackLock());
 			applyPendingRestore();
 			m_seenInstrumentRevision = m_device->instrumentStateRevision();
+			m_requestedPanelRevision = m_device->panelInstrumentRevision();
 			updateHostLatency();
 		}
 		return hasValidRom();

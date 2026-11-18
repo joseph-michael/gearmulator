@@ -338,7 +338,8 @@ namespace
 		auto delayed = instantiate(_formats, _description, _rate, true, &saved);
 		const auto delayedAudio = render(*delayed, 32768, note(8192));
 		require(std::abs((onset(delayedAudio) - variableOnset) - 4096) <= 32,
-			"A 4096-sample MIDI offset did not produce the corresponding audio delay");
+			"A 4096-sample MIDI offset did not produce the corresponding audio delay: onset="
+			+ juce::String(variableOnset) + " delayed onset=" + juce::String(onset(delayedAudio)));
 
 		// Two live instances: changing A must not change B's persisted settings or sound.
 		auto a = instantiate(_formats, _description, _rate, true, &saved);

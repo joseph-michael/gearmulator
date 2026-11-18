@@ -23,11 +23,12 @@ namespace
 		std::exit(1);
 	}
 
-	std::unique_ptr<emu88Player::Processor> create()
+	std::unique_ptr<emu88Player::Processor> create(
+		const emu88Lib::DeviceModel model = emu88Lib::DeviceModel::Sc55Mk2)
 	{
 		juce::AudioProcessor::setTypeOfNextNewPlugin(juce::AudioProcessor::wrapperType_VST3);
 		auto processor = std::make_unique<emu88Player::Processor>();
-		require(processor->setDeviceModel(emu88Lib::DeviceModel::Sc55Mk2), "SC-55mkII ROMs did not load");
+		require(processor->setDeviceModel(model), "device ROMs did not load");
 		processor->setRateAndBufferSizeDetails(44100.0, 512);
 		processor->prepareToPlay(44100.0, 512);
 		return processor;
@@ -59,12 +60,50 @@ namespace
 		processor.getStateInformation(state);
 		return state;
 	}
+
+	// What the display shows: the character memory, or the dots of a graphic one.
+	std::string display(emu88Player::Processor& processor)
+	{
+		const auto screen = processor.hardware()->displaySnapshot().screens[0];
+		return std::string(screen.ddRam.begin(), screen.ddRam.end()) + std::string(screen.mono.begin(), screen.mono.end());
+	}
+
+	// Boards whose firmware memory layout is unknown are asked for their settings when the host saves.
+	void verifySc88ProPanelRecall()
+	{
+		auto original = create(emu88Lib::DeviceModel::Sc88Pro);
+		const auto before = save(*original);
+		const auto defaults = original->partState().setup().parts[0];
+		press(*original, emu88Lib::Button::InstR);
+		press(*original, emu88Lib::Button::InstR);
+		const auto saved = save(*original);
+		const auto part = original->partState().setup().parts[0];
+		std::printf("SC-88Pro part 1 bank %d program %d\n", part.bankMsb, part.program);
+		require(part.bankMsb != defaults.bankMsb || part.program != defaults.program,
+			"SC-88Pro front-panel instrument was not captured on save");
+		require(saved != before, "SC-88Pro front-panel instrument change was absent from project state");
+		require(save(*original) == saved, "saving twice without a panel edit changed the SC-88Pro project state");
+		const auto expected = display(*original);
+		original.reset();
+		auto reopened = create(emu88Lib::DeviceModel::Sc88Pro);
+		render(*reopened, 22050);
+		require(display(*reopened) != expected,
+			"SC-88Pro display did not show the instrument change");
+		reopened->setStateInformation(saved.getData(), static_cast<int>(saved.getSize()));
+		render(*reopened, 22050);
+		std::printf("SC-88Pro display %.16s\n", display(*reopened).c_str());
+		require(display(*reopened) == expected,
+			"reopened SC-88Pro project did not restore the panel instrument in firmware");
+		std::puts("PASS SC-88Pro front-panel instrument recall");
+	}
 }
 
 int main()
 {
 	juce::ScopedJuceInitialiser_GUI juce;
 	emu88Player::configureRomSearchPaths({});
+	if(emu88Player::Processor::isModelAvailable(emu88Lib::DeviceModel::Sc88Pro))
+		verifySc88ProPanelRecall();
 	if(!emu88Player::Processor::isModelAvailable(emu88Lib::DeviceModel::Sc55Mk2))
 	{
 		std::puts("SKIP SC-55mkII panel recall requires its user-supplied ROMs");

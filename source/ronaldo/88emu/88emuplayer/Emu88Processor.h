@@ -209,6 +209,9 @@ namespace emu88Player
 		void applyPendingRestore();
 		void updateHostLatency();
 		bool captureHardwareInstruments();
+		// For boards whose part memory cannot be read directly: after a front-panel press, asks the board
+		// for each part's instrument and channel, running it ahead of the audio until it answered.
+		void requestPanelInstruments();
 
 		jucePlayer::AudioRouting* m_audioRouting = nullptr;
 		jucePlayer::MidiInputRouting* m_midiInputRouting = nullptr;
@@ -223,6 +226,7 @@ namespace emu88Player
 		// A missing ROM or a host that restores before prepareToPlay leaves this for the next preparation.
 		std::vector<synthLib::SMidiEvent> m_pendingRestore;
 		uint64_t m_seenInstrumentRevision = 0;
+		uint64_t m_requestedPanelRevision = 0;
 		// UI MIDI is applied by firmware on later callbacks. Preserve the selected instrument until it arrives.
 		uint64_t m_pendingInstrumentEdits = 0;
 		uint64_t m_panelRevisionAtInstrumentEdit = 0;

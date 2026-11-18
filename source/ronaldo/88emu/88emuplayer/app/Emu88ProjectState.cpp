@@ -59,6 +59,7 @@ namespace emu88Player
 	{
 		const juce::ScopedLock lock(getCallbackLock());
 		captureHardwareInstruments();
+		requestPanelInstruments();
 		juce::XmlElement state("EMU88Project");
 		state.setAttribute("version", g_stateVersion);
 		state.setAttribute("model", static_cast<int>(m_deviceModel));
@@ -198,6 +199,67 @@ namespace emu88Player
 		}
 		m_seenInstrumentRevision = m_device->instrumentStateRevision();
 		return changed;
+	}
+
+	void Processor::requestPanelInstruments()
+	{
+		if(!hasValidRom() || !m_engine || !m_pendingRestore.empty() || getSampleRate() <= 0.0 ||
+		   !emu88Lib::gs::answersDataRequests(m_deviceModel) || m_device->instrumentStateRevision() != 0 ||
+		   m_dataRequestsRunning.load(std::memory_order_acquire))
+			return;
+		const auto revision = m_device->panelInstrumentRevision();
+		if(revision == m_requestedPanelRevision)
+			return;
+		// The board answers a parameter within 9 ms; one that has nothing at an address says nothing.
+		constexpr double timeoutSeconds = 0.1;
+		constexpr size_t giveUpAfter = 4;
+		const auto blockSize = static_cast<size_t>(std::max(32, getBlockSize()));
+		const bool maps = emu88Lib::gs::hasToneMaps(m_deviceModel);
+		const auto partCount = m_partState.setup().parts.size();
+		std::vector<synthLib::SMidiEvent> midiOut;
+		size_t asked = 0, answeredCount = 0;
+		const auto request = [&](const uint8_t _port, const uint32_t _address, const uint32_t _size)
+		{
+			if(asked >= giveUpAfter && !answeredCount)
+				return;
+			++asked;
+			// A request changes nothing on the board, so it bypasses the part state.
+			synthLib::SMidiEvent event(synthLib::MidiEventSource::Host);
+			const auto message = emu88Lib::gs::rq1(_address, _size);
+			event.sysex.assign(message.begin(), message.end());
+			event.port = _port;
+			m_engine->addMidiEvent(event);
+			bool answered = false;
+			for(double elapsed = 0.0; !answered && elapsed < timeoutSeconds;
+				elapsed += static_cast<double>(blockSize) / getSampleRate())
+			{
+				midiOut.clear();
+				m_engine->process({}, {}, blockSize, 120.0f, 0.0f, false, false);
+				m_engine->getMidiOut(midiOut);
+				for(const auto& reply : midiOut)
+				{
+					emu88Lib::gs::Dt1 dt1;
+					if(!emu88Lib::gs::parseDt1(reply.sysex.data(), reply.sysex.size(), dt1))
+						continue;
+					answered |= dt1.address == _address;
+					m_partState.processReply(reply, _port);
+				}
+			}
+			if(answered) ++answeredCount;
+		};
+		for(size_t i = 0; i < partCount; ++i)
+		{
+			const auto port = static_cast<uint8_t>(i / emu88Lib::gs::g_partsPerGroup);
+			const auto part = static_cast<uint8_t>(i % emu88Lib::gs::g_partsPerGroup);
+			for(const auto param : {emu88Lib::gs::PartParam::ToneNumber, emu88Lib::gs::PartParam::RxChannel})
+				request(port, emu88Lib::gs::partAddress(part, param), emu88Lib::gs::paramSize(param));
+			if(maps)
+			{
+				request(port, emu88Lib::gs::partAddress(part, emu88Lib::gs::PartMapParam::ToneMap), 1);
+				request(port, emu88Lib::gs::partAddress(part, emu88Lib::gs::PartMapParam::ToneMap0), 1);
+			}
+		}
+		m_requestedPanelRevision = revision;
 	}
 
 	void Processor::applyPendingRestore()

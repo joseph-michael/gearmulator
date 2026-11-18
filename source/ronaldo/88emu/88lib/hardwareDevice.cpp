@@ -363,8 +363,10 @@ namespace emu88Lib
 		   m_pendingPanelCommands.back().value == static_cast<int32_t>(_buttons))
 			return;
 		m_pendingPanelCommands.push_back({PanelCommandType::Buttons, static_cast<int32_t>(_buttons)});
-		if(isSc55Model(m_model) && (_buttons & (buttonBit(Button::InstL) | buttonBit(Button::InstR) |
-		   buttonBit(Button::MidiChL) | buttonBit(Button::MidiChR))))
+		// The SC-55s count the buttons that pick an instrument or channel. The other boards have more ways
+		// to change a part from the panel, so any press counts there.
+		if(_buttons && (!isSc55Model(m_model) || (_buttons & (buttonBit(Button::InstL) | buttonBit(Button::InstR) |
+		   buttonBit(Button::MidiChL) | buttonBit(Button::MidiChR)))))
 			m_panelInstrumentRevision.fetch_add(1, std::memory_order_relaxed);
 	}
 
